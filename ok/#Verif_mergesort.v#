@@ -1,0 +1,200 @@
+Require Import VST.floyd.proofauto.
+Require Import VST.floyd.library.
+Require Import vst.mergesort.
+Instance CompSpecs : compspecs. make_compspecs prog. Defined.
+Definition Vprog : varspecs. mk_varspecs prog. Defined.
+
+Require Export Coq.Lists.List.
+Require Export Coq.Arith.Arith.
+Require Import Program.Wf.
+
+Program Fixpoint merge (x : list Z) (y : list Z) {measure (length x + length y)} : list Z :=
+  match x with
+  | x1 :: xs =>
+    match y with
+      | y1 :: ys => if x1 <? y1
+        then x1::(merge xs y)
+        else y1::(merge x ys)
+      | _ => x
+    end
+  | _ => y
+  end.
+Next Obligation.
+  apply Nat.add_le_lt_mono; auto.
+Qed. 
+
+Lemma skipn_length (n : nat) :
+  forall {A} (l : list A), length (skipn n l) = Nat.sub (length l) n.
+Proof.
+  intros A.
+  induction n.
+  - intros l; simpl; rewrite Nat.sub_0_r; reflexivity.
+  - destruct l; simpl; auto.
+Qed.
+
+Program Fixpoint mergesort (x : list Z) {measure (length x)}: list Z :=
+  match x with
+  | nil => nil
+  | x :: nil => x :: nil
+  | x :: y :: nil => if x <? y
+    then (x :: y :: nil)
+    else (y :: x :: nil)
+  | x :: y :: z :: rest => 
+    let a := (x :: y :: z :: rest) in 
+    let p := (Nat.div2 (length a)) in
+    merge (mergesort (firstn p a)) (mergesort (skipn p a))
+  end.
+Next Obligation.
+  rewrite firstn_length.
+  simpl.
+  apply lt_n_S.
+  apply Nat.min_lt_iff.
+  left.
+  destruct (length rest).
+  auto.
+  apply lt_n_S.
+  destruct n.
+  auto.
+  rewrite Nat.lt_div2.
+  auto.
+  apply Nat.lt_0_succ.
+Qed.
+Next Obligation.
+  rewrite skipn_length.
+  simpl.
+  destruct (length rest).
+  auto.
+  destruct Nat.div2.
+  auto.
+  rewrite Nat.lt_succ_r.
+  rewrite Nat.le_succ_r.
+  left.
+  rewrite Nat.le_succ_r.
+  left.
+  rewrite Nat.le_sub_le_add_r.
+  apply le_plus_l.
+Qed.
+
+Lemma merge_length : forall l1 , forall l2 , Zlength (merge l1 l2 ) = Zlength l1 + Zlength l2.
+Proof.
+  induction l1.
+  intros.
+  intuition.
+
+  induction l2.
+  intuition.
+
+  unfold merge.
+  unfold merge_func.
+  rewrite Wf.WfExtensionality.fix_sub_eq_ext; simpl; fold merge_func.
+  destruct (a <? a0); simpl; do 3 rewrite Zlength_cons.
+
+  specialize (IHl1 (a0 :: l2)). 
+  unfold merge in IHl1.
+  rewrite IHl1.
+  intuition.
+
+  unfold merge in IHl2.
+  rewrite IHl2.
+  intuition.
+Qed.
+
+Lemma mergesort_length : forall l,  length (mergesort l ) = length l.
+Proof.
+  intro.
+ generalize (lt_n_Sn (length l)).
+remember (S (length l)).
+clear Heqn.
+generalize l. clear l.
+induction n; intros.
+destruct l; simpl in *; auto.
+inv H.
+
+destruct l.
+simpl; auto.
+destruct l.
+simpl; auto.
+destruct l.
+unfold mergesort.
+rewrite Wf.WfExtensionality.fix_sub_eq_ext; simpl; fold mergesort.
+destruct (z <? z0); simpl; auto.
+
+unfold mergesort.
+rewrite Wf.WfExtensionality.fix_sub_eq_ext; simpl; fold mergesort.
+Admitted.
+
+
+Lemma mergesort_zlength : forall l,  Zlength (mergesort l ) = Zlength l.
+Proof.
+intros.
+do 2 rewrite Zlength_correct.
+f_equal.
+apply mergesort_length.
+Qed.
+
+Definition my_mergesort_spec : ident * funspec :=
+ DECLARE _my_mergesort
+ WITH p: val,  sh : share, il: list Z, gv: globals
+ PRE [ tptr tuint , tint ] 
+    PROP (readable_share sh;
+          3 < Zlength il <= Int.max_signed) 
+    PARAMS (p; Vint (Int.repr (Zlength il - 1 )) )
+    GLOBALS(gv) 
+    SEP  (data_at sh (tarray tuint (Zlength il)) (map Vint (map Int.repr il)) p;
+          mem_mgr gv)
+ POST [ tvoid ] 
+    PROP ( ) RETURN ()
+    SEP (data_at sh (tarray tuint (Zlength (mergesort il))) (map Vint (map Int.repr (mergesort il))) p;
+         mem_mgr gv).
+
+
+Definition Gprog : funspecs :=
+  ltac:(with_library prog [
+             my_mergesort_spec                                    
+ ]). 
+
+Lemma div2_le : forall z, z >= 0 -> Z.div2 z <= z .
+Proof.
+intros.
+unfold Z.div2.
+destruct z.
+- lia.
+- destruct p; unfold Pos.div2; lia.
+- contradiction.
+Qed.
+
+Lemma div2_le2 : forall z, z > 0 -> Z.div2 z < z .
+Proof.
+intros.
+unfold Z.div2.
+destruct z.
+- lia.
+- destruct p; unfold Pos.div2; lia.
+- discriminate.
+Qed.
+
+Lemma z2n : forall x : Z , 0 < x <= Int.max_signed -> Int.divs (Int.repr x) (Int.repr 2) = Int.repr (Z.div2 x).
+Proof.
+  unfold Int.divs.
+  intros.
+  rewrite Int.signed_repr; try rep_lia.
+  rewrite Int.signed_repr; try rep_lia.
+  f_equal.
+  rewrite Zdiv2_div.
+  apply Zquot.Zquot_Zdiv_pos; lia.
+Qed.
+
+
+Lemma body_my_mergesort: semax_body Vprog Gprog f_my_mergesort my_mergesort_spec.
+Proof.
+  start_function.
+
+
+  assert_PROP (Zlength il = Zlength (map Vint (map Int.repr il))).
+  entailer!.
+
+    assert (0 <= Zlength il - 1 <  Zlength (map Vint (map Int.repr il)) ).
+    rep_lia.
+
+  forward.
+
